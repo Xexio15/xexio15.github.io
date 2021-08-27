@@ -1,6 +1,6 @@
 ---
 title: My first failed journey in the OSCP 
-date: 2021-08-25 16:00:00 +0100
+date: 2021-08-25 17:00:00 +0100
 categories: [Cybersecurity, OSCP]
 tags: [cybersecurity, learning, oscp, courses, pentesting]     # TAG names should always be lowercase
 ---
