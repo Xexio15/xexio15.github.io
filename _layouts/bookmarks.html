@@ -55,11 +55,7 @@ layout: default
             {% if page.image.height %}height="{{ page.image.height }}"{% endif %}>
         {% endif %}
 
-        {% for post in site.posts %}
-        {% if post.title == "bookmarks" %}
-            {{ post.content }}
-        {% endif %}
-        {% endfor %}
+        {{ content }}
 
       </div>
 
