@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en"><generator uri="https://jekyllrb.com/" version="4.4.1">Jekyll</generator><link href="https://xexio15.github.io/feed.xml" rel="self" type="application/atom+xml" /><link href="https://xexio15.github.io/" rel="alternate" type="text/html" hreflang="en" /><updated>2025-06-03T01:49:50+02:00</updated><id>https://xexio15.github.io/feed.xml</id><title type="html">0x10</title><subtitle>A newbie blog about cybersecurity, where I&apos;ll try to store my knowledge and learn to explain some concepts.</subtitle><entry><title type="html">Abusing WriteOwner Rights in Detail</title><link href="https://xexio15.github.io/posts/WriteOwner/" rel="alternate" type="text/html" title="Abusing WriteOwner Rights in Detail" /><published>2025-05-29T18:00:00+02:00</published><updated>2025-05-29T18:00:00+02:00</updated><id>https://xexio15.github.io/posts/WriteOwner</id><content type="html" xml:base="https://xexio15.github.io/posts/WriteOwner/"><![CDATA[<p>Hi again! It’s been… a while? Clearly, I wasn’t capable of maintaining this blog after, wow, 4 years of nothing. That really takes a lot of effort to not write anything here.</p>
+
+<p>So, let’s start again, but this time I’ll get straight to the point.</p>
+
+<p>Recently, I was working through some HTB easy-medium machines and tackled <strong>EscapeTwo</strong>, which is rated as an Easy one. In my opinion, it’s “Easy” thanks to some tools we now rely on a lot, specifically <strong>Bloodhound</strong>, which gives you the steps to follow to abuse any weird permission in an AD. But this sometimes leads to people using those documented commands directly and not really understanding what they’re doing. I’ve been in this position too, but over the years, I’ve tried to always understand the basics in these situations. So, the objective for this post is to contribute a little bit to that understanding.</p>
+
+<blockquote>
+  <p><strong>Spoiler Alert:</strong> This will uncover some parts of the EscapeTwo box PrivEsc!</p>
+</blockquote>
+
+<p>This box basically used the <strong>WriteOwner</strong> privilege of the <code class="language-plaintext highlighter-rouge">ryan</code> user over <code class="language-plaintext highlighter-rouge">ca_svc</code> to gain control over it, which is a <strong>CertPublisher</strong> and allows for some extra abilities.</p>
+
+<p>But what does <strong>WriteOwner</strong> actually allow, and how do the tools we use work?</p>
+
+<hr />
+
+<h2 id="modify-owner">Modify Owner</h2>
+
+<p><img src="/assets/img/owneredit.png" alt="Owneredit flow" /></p>
+
+<p>Our first step is to <strong>change the Owner</strong> of the <code class="language-plaintext highlighter-rouge">ca_svc</code> object using <strong>impacket-owneredit</strong>.</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>impacket-owneredit <span class="nt">-dc-ip</span> 10.10.11.51 <span class="nt">-action</span> write <span class="nt">-new-owner</span> <span class="s1">'ryan'</span> <span class="nt">-target</span> <span class="s1">'ca_svc'</span> sequel.htb/ryan:PASS
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p><em>To be clear for the most beginners: these permissions are managed by the <strong>LDAP</strong> service, so every communication will be with LDAP, which is the service that manages users and permissions.</em></p>
+
+<p>To do this, <code class="language-plaintext highlighter-rouge">impacket-owneredit</code> starts a session in LDAP with the credentials we have, <code class="language-plaintext highlighter-rouge">ryan</code> in this case.<br />
+Then we retrieve from LDAP the <a href="https://learn.microsoft.com/en-us/windows/win32/adschema/a-ntsecuritydescriptor#windows-server-2012"><code class="language-plaintext highlighter-rouge">nTSecurityDescriptor</code></a> field of the target user using its <strong>SAMAccountName</strong>, <code class="language-plaintext highlighter-rouge">ca_svc</code>. This field contains two important attributes: the <strong>Owner</strong> of the Object (which is what we will modify now), and the <strong>ACL (or DACL)</strong> of the object (which we’ll talk about in the following steps).</p>
+
+<p>For those who want a bit more detail about this field, its format looks something like this:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>O:DAG:DAD:AI(A;;LCRPLORC;;;PS)(A;;RC;;;AU)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;AO)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;DA)(A;CI;WO;;;S-1-5-21-548670397-972687484-3496335370-1114)(OA;;CR;ab721a53-1e2f-11d0-9819-00aa0040529b;;WD)(OA;;RPWP;e45795b2-9455-11d1-aebd-0000f80367c1;;PS)(OA;;RPWP;e45795b3-9455-11d1-aebd-0000f80367c1;;PS)(OA;;CR;ab721a53-1e2f-11d0-9819-00aa0040529b;;PS)(OA;;CR;ab721a54-1e2f-11d0-9819-00aa0040529b;;PS)(OA;;CR;ab721a56-1e2f-11d0-9819-00aa0040529b;;PS)(OA;;RPWP;77b5b886-944a-11d1-aebd-0000f80367c1;;PS)(OA;;RP;e48d0154-bcf8-11d1-8702-00c04fb96050;;AU)(OA;;RP;77b5b886-944a-11d1-aebd-0000f80367c1;;AU)(OA;;RP;e45795b3-9455-11d1-aebd-0000f80367c1;;AU)(OA;;RP;59ba2f42-79a2-11d0-9020-00c04fc2d3cf;;AU)(OA;;RP;46a9b11d-60ae-405a-b7e8-ff8a58d456d2;;S-1-5-32-560)(OA;;RPWP;5805bc62-bdc9-4428-a5e2-856a0f4c185e;;S-1-5-32-561)(OA;;RPWP;6db69a1c-9422-11d1-aebd-0000f80367c1;;S-1-5-32-561)(OA;;RPWP;bf967a7f-0de6-11d0-a285-00aa003049e2;;CA)(OA;;RP;037088f8-0ae1-11d2-b422-00a0c968f939;;RS)(OA;;RP;bc0ac240-79a9-11d0-9020-00c04fc2d4cf;;RS)(OA;;RP;5f202010-79a5-11d0-9020-00c04fc2d4cf;;RS)(OA;;RP;4c164200-20c0-11d0-a768-00aa006e0529;;RS)(OA;CIIOID;RP;4c164200-20c0-11d0-a768-00aa006e0529;4828cc14-1437-45bc-9b07-ad6f015e5f28;RU)(OA;CIID;RP;4c164200-20c0-11d0-a768-00aa006e0529;bf967aba-0de6-11d0-a285-00aa003049e2;RU)(OA;CIIOID;RP;5f202010-79a5-11d0-9020-00c04fc2d4cf;4828cc14-1437-45bc-9b07-ad6f015e5f28;RU)(OA;CIID;RP;5f202010-79a5-11d0-9020-00c04fc2d4cf;bf967aba-0de6-11d0-a285-00aa003049e2;RU)(OA;CIIOID;RP;bc0ac240-79a9-11d0-9020-00c04fc2d4cf;4828cc14-1437-45bc-9b07-ad6f015e5f28;RU)(OA;CIID;RP;bc0ac240-79a9-11d0-9020-00c04fc2d4cf;bf967aba-0de6-11d0-a285-00aa003049e2;RU)(OA;CIIOID;RP;59ba2f42-79a2-11d0-9020-00c04fc2d3cf;4828cc14-1437-45bc-9b07-ad6f015e5f28;RU)(OA;CIID;RP;59ba2f42-79a2-11d0-9020-00c04fc2d3cf;bf967aba-0de6-11d0-a285-00aa003049e2;RU)(OA;CIIOID;RP;037088f8-0ae1-11d2-b422-00a0c968f939;4828cc14-1437-45bc-9b07-ad6f015e5f28;RU)(OA;CIID;RP;037088f8-0ae1-11d2-b422-00a0c968f939;bf967aba-0de6-11d0-a285-00aa003049e2;RU)(OA;CIID;RPWP;5b47d60f-6090-40b2-9f37-2a4de88f3063;;S-1-5-21-548670397-972687484-3496335370-526)(OA;CIID;RPWP;5b47d60f-6090-40b2-9f37-2a4de88f3063;;S-1-5-21-548670397-972687484-3496335370-527)(OA;CIIOID;SW;9b026da6-0d3c-465c-8bee-5199d7165cba;bf967a86-0de6-11d0-a285-00aa003049e2;CO)(OA;CIIOID;SW;9b026da6-0d3c-465c-8bee-5199d7165cba;bf967a86-0de6-11d0-a285-00aa003049e2;PS)(OA;CIIOID;RP;b7c69e6d-2cc7-11d2-854e-00a0c983f608;bf967a86-0de6-11d0-a285-00aa003049e2;ED)(OA;CIIOID;RP;b7c69e6d-2cc7-11d2-854e-00a0c983f608;bf967a9c-0de6-11d0-a285-00aa003049e2;ED)(OA;CIID;RP;b7c69e6d-2cc7-11d2-854e-00a0c983f608;bf967aba-0de6-11d0-a285-00aa003049e2;ED)(OA;CIIOID;WP;ea1b7b93-5e48-46d5-bc6c-4df4fda78a35;bf967a86-0de6-11d0-a285-00aa003049e2;PS)(OA;CIIOID;LCRPLORC;;4828cc14-1437-45bc-9b07-ad6f015e5f28;RU)(OA;CIIOID;LCRPLORC;;bf967a9c-0de6-11d0-a285-00aa003049e2;RU)(OA;CIID;LCRPLORC;;bf967aba-0de6-11d0-a285-00aa003049e2;RU)(OA;OICIID;RPWP;3f78c3e5-f79a-46bd-a0b8-9d18116ddc79;;PS)(OA;CIID;RPWPCR;91e647de-d96f-4b70-9557-d63ff4f3ccd8;;PS)(A;CIID;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;S-1-5-21-548670397-972687484-3496335370-519)(A;CIID;LC;;;RU)(A;CIID;CCLCSWRPWPLOCRSDRCWDWO;;;BA)
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>But well… that’s a bit hard to read, so here’s a reduced version that we’ll look into:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>O:DAG:DAD:AI(A;;LCRPLORC;;;PS)(A;;RC;;;AU)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;AO)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;DA)(A;CI;WO;;;S-1-5-21-548670397-972687484-3496335370-1114)
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>This is still difficult to read, but it’s what this script is editing. Anyway, a more human-readable reduced version will look like this:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+</pre></td><td class="rouge-code"><pre>Owner: SEQUEL\Domain Admins
+Group: SEQUEL\Domain Admins
+
+DACL:
+    AceQualifier           : AccessAllowed
+    ObjectDN               : CN=Certification Authority,CN=Users,DC=sequel,DC=htb
+    ActiveDirectoryRights  : ReadProperty
+    ObjectAceType          : User-Account-Restrictions
+    ObjectSID              : S-1-5-21-548670397-972687484-3496335370-1607
+    InheritanceFlags       : None
+    BinaryLength           : 56
+    AceType                : AccessAllowedObject
+    ObjectAceFlags         : ObjectAceTypePresent
+    IsCallback             : False
+    PropagationFlags       : None
+    SecurityIdentifier     : S-1-5-21-548670397-972687484-3496335370-553
+    AccessMask             : 16
+    AuditFlags             : None
+    IsInherited            : False
+    AceFlags               : None
+    InheritedObjectAceType : All
+    OpaqueLength           : 0
+
+    AceQualifier           : AccessAllowed
+    ObjectDN               : CN=Certification Authority,CN=Users,DC=sequel,DC=htb
+    ActiveDirectoryRights  : ReadProperty
+    ObjectAceType          : User-Logon
+    ObjectSID              : S-1-5-21-548670397-972687484-3496335370-1607
+    InheritanceFlags       : None
+    BinaryLength           : 56
+    AceType                : AccessAllowedObject
+    ObjectAceFlags         : ObjectAceTypePresent
+    IsCallback             : False
+    PropagationFlags       : None
+    SecurityIdentifier     : S-1-5-21-548670397-972687484-3496335370-553
+    AccessMask             : 16
+    AuditFlags             : None
+    IsInherited            : False
+    AceFlags               : None
+    InheritedObjectAceType : All
+    OpaqueLength           : 0
+
+    AceType               : AccessAllowed
+    ObjectDN              : CN=Certification Authority,CN=Users,DC=sequel,DC=htb
+    ActiveDirectoryRights : WriteOwner
+    OpaqueLength          : 0
+    ObjectSID             : S-1-5-21-548670397-972687484-3496335370-1607
+    InheritanceFlags      : ContainerInherit
+    BinaryLength          : 36
+    IsInherited           : False
+    IsCallback            : False
+    PropagationFlags      : None
+    SecurityIdentifier    : S-1-5-21-548670397-972687484-3496335370-1114
+    AccessMask            : 524288
+    AuditFlags            : None
+    AceFlags              : ContainerInherit
+    AceQualifier          : AccessAllowed
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>Basically, this is formed as four values (see <a href="https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-string-format?redirectedfrom=MSDN">reference</a>):</p>
+
+<ul>
+  <li><strong>O:</strong> Owner</li>
+  <li><strong>G:</strong> Group</li>
+  <li><strong>D:</strong> DACL</li>
+  <li><strong>S:</strong> SACL (Not present in this example)</li>
+</ul>
+
+<p>In our example:</p>
+<ul>
+  <li><strong>O:</strong> DA (which corresponds to <a href="https://learn.microsoft.com/en-us/windows/win32/secauthz/sid-strings">SDDL_DOMAIN_ADMINISTRATORS</a>)</li>
+  <li><strong>G:</strong> DA (SDDL_DOMAIN_ADMINISTRATORS)</li>
+  <li><strong>D:</strong> A list of ACEs (<strong>Access Control Entry</strong>)</li>
+</ul>
+
+<p>Now, we want to <strong>modify the Owner</strong>, so instead of <code class="language-plaintext highlighter-rouge">O:DA</code>, we want to put <code class="language-plaintext highlighter-rouge">ryan</code> as the owner. Since <code class="language-plaintext highlighter-rouge">ryan</code> is not a default user and doesn’t have a known SID String, instead of two letters, we will put his <strong>SID</strong>.</p>
+
+<p>To obtain it, the script will query LDAP for this information. We can do it in PowerShell with:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+</pre></td><td class="rouge-code"><pre>Get-ADUser ryan -Properties objectSid | Select-Object Name, objectSid
+
+Name        objectSid
+----        ---------
+Ryan Howard S-1-5-21-548670397-972687484-3496335370-1114
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>So the <code class="language-plaintext highlighter-rouge">nTSecurityDescriptor</code> will look like:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>O:S-1-5-21-548670397-972687484-3496335370-1114G:DAD:AI ...
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>Querying those changes to LDAP will give us <strong>ownership over</strong> <code class="language-plaintext highlighter-rouge">ca_svc</code>.</p>
+
+<hr />
+
+<h2 id="dacl-edit">DACL Edit</h2>
+
+<p><img src="/assets/img/dacledit.png" alt="DACLEdit flow" /></p>
+
+<p>The next step is using <strong>impacket-dacledit</strong>. This script does the same first steps until obtaining the <code class="language-plaintext highlighter-rouge">nTSecurityDescriptor</code>, and as you probably already guessed, it will modify the <strong>DACL</strong> we were talking about before.</p>
+
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>impacket-dacledit <span class="nt">-action</span> <span class="s1">'write'</span> <span class="nt">-rights</span> <span class="s1">'FullControl'</span> <span class="nt">-principal</span> <span class="s1">'ryan'</span> <span class="nt">-target</span> <span class="s1">'ca_svc'</span> sequel.htb/ryan:PASS <span class="nt">-dc-ip</span> 10.10.11.51
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<h4 id="but-what-is-the-dacl">But what is the DACL?</h4>
+<p><strong>DACL</strong> stands for <strong>Discretionary Access Control List</strong> (sometimes referred to as ACL), which, as its name suggests, is a list. This list contains <strong>ACEs</strong> (<strong>Access Control Entries</strong>), which are every specified permission over our object.</p>
+
+<p>Using the same EscapeTwo example, the reduced DACL string looks like this:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>D:AI(A;;LCRPLORC;;;PS)(A;;RC;;;AU)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;AO)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;DA)(A;CI;WO;;;S-1-5-21-548670397-972687484-3496335370-1114)
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>Here, <code class="language-plaintext highlighter-rouge">AI</code> corresponds to <a href="https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-string-format?redirectedfrom=MSDN">SDDL_AUTO_INHERITED</a>, meaning it will inherit the group DACL, and following adds any other specific permission on this object. Each element between parentheses represents an <strong>ACE</strong>. If we look at the last one, we see something familiar:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>(A;CI;WO;;;S-1-5-21-548670397-972687484-3496335370-1114)
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>This <strong>SID</strong> is <code class="language-plaintext highlighter-rouge">ryan</code>’s, and we can see here this <strong>WriteOwner</strong> permission set as <code class="language-plaintext highlighter-rouge">WO</code>. More human-readable, it will look like:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+</pre></td><td class="rouge-code"><pre>AceType               : AccessAllowed
+ObjectDN              : CN=Certification Authority,CN=Users,DC=sequel,DC=htb
+ActiveDirectoryRights : WriteOwner &lt;---- PERMISSION
+OpaqueLength          : 0
+ObjectSID             : S-1-5-21-548670397-972687484-3496335370-1607
+InheritanceFlags      : ContainerInherit
+BinaryLength          : 36
+IsInherited           : False
+IsCallback            : False
+PropagationFlags      : None
+SecurityIdentifier    : S-1-5-21-548670397-972687484-3496335370-1114 &lt;--- ryan SID
+AccessMask            : 524288
+AuditFlags            : None
+AceFlags              : ContainerInherit
+AceQualifier          : AccessAllowed
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>So, okay, we asked LDAP for this DACL, now what? Well, in the previous step, we changed the owner of this object to <code class="language-plaintext highlighter-rouge">ryan</code>. Now, we are allowed to <strong>modify those ACEs</strong>, and as we specified in the arguments, we will <strong>add a new ACE</strong> that specifies <strong>FullControl</strong> to <code class="language-plaintext highlighter-rouge">ca_svc</code>. The following ACE will be added:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;S-1-5-21-548670397-972687484-3496335370-1114)
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p>As we can see, now, instead of <code class="language-plaintext highlighter-rouge">WO</code>, the third value contains a bunch of rights, those are every single AD-defined right, so we have <strong>total control over the object</strong> when we act as <code class="language-plaintext highlighter-rouge">ryan</code>.</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre></td><td class="rouge-code"><pre>AceType               : AccessAllowed
+ObjectDN              : CN=Certification Authority,CN=Users,DC=sequel,DC=htb
+ActiveDirectoryRights : CreateChild, Self, WriteProperty, ExtendedRight, Delete, GenericRead, WriteDacl, WriteOwner &lt;---- HERE
+OpaqueLength          : 0
+ObjectSID             : S-1-5-21-548670397-972687484-3496335370-1607
+InheritanceFlags      : ContainerInherit
+BinaryLength          : 24
+IsInherited           : True
+IsCallback            : False
+PropagationFlags      : None
+SecurityIdentifier    : S-1-5-32-544
+AccessMask            : 983485
+AuditFlags            : None
+AceFlags              : ContainerInherit, Inherited
+AceQualifier          : AccessAllowed
+
+</pre></td></tr></tbody></table></code></pre></div></div>
+<hr />
+
+<h2 id="obtaining-shadow-credentials">Obtaining Shadow Credentials</h2>
+
+<p>This part goes a bit beyond the original topic, since we already abused WriteOwner, but leaving the path unfinished felt odd also I think it gives a nice example of what <strong>FullControl</strong> allows. So, let’s see how to complete the exploitation. Since this isn’t the main focus, I won’t go into extensive detail.</p>
+
+<p>This step is specific to this case, as we now have FullControl over a <strong>CertPublishers</strong> user who can issue certificates. For this, we’ll use <strong>certipy</strong>.</p>
+
+<p>We use the command:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre></td><td class="rouge-code"><pre>certipy shadow auto <span class="nt">-username</span> ryan@sequel.htb <span class="nt">-password</span> PASS <span class="nt">-account</span> ca_svc <span class="nt">-dc-ip</span> 10.10.11.51
+</pre></td></tr></tbody></table></code></pre></div></div>
+
+<p><strong>Shadow</strong> refers to obtaining a shadow credential, and <strong>auto</strong> is a multi-step process where a new Key Credential is added, the NTLM hash is obtained, and then the Key Credential is deleted to avoid leaving any trace.</p>
+
+<p><img src="/assets/img/certipy.png" alt="Certipy flow" /></p>
+
+<p>Here’s what certipy does:</p>
+
+<ol>
+  <li><strong>Creates an LDAP session</strong> as <code class="language-plaintext highlighter-rouge">ryan</code>.</li>
+  <li><strong>Generates an X509 Certificate</strong> and a KeyCredential for this certificate.</li>
+  <li><strong>Modifies the <code class="language-plaintext highlighter-rouge">ca_svc</code> <code class="language-plaintext highlighter-rouge">msDS-KeyCredentialLink</code> attribute</strong> to include the newly created public key.</li>
+  <li>Using this KeyCredential, it auths through <strong>Kerberos PKINIT</strong> (which allows certificate-based authentication, this is what a shadow credential is), obtains a <strong>TGT</strong> (Ticket Granting Ticket)</li>
+  <li>Then requests a <strong>TGS</strong> (Ticket Granting Service) for <code class="language-plaintext highlighter-rouge">ca_svc</code>.</li>
+  <li>Since we can get the <strong>encryption key</strong> of this user, we can <strong>decrypt the TGS</strong> and finally <strong>obtain the NTLM hash</strong>, which can be used with Pass-the-Hash.</li>
+  <li>Before finishing, the key is deleted from <code class="language-plaintext highlighter-rouge">msDS-KeyCredentialLink</code> to remove any trace.</li>
+</ol>
+
+<p>With this, we have full and easy access to <code class="language-plaintext highlighter-rouge">ca_svc</code>. The PrivEsc for this machine doesn’t end here, but that’s a topic for another post.</p>
+
+<hr />
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>So that’s it, a bit of Active Directory in detail. It’s a simple topic, but I think posts like this can help a lot of newcomers, and honestly, it also helps me reinforce my own understanding of how this environment works.</p>
+
+<p>I really like the Shadow Credentials step, so I’ll probably write something more in-depth about it in the future, since it’s a really interesting way of authenticating in AD and has a lot of details.</p>]]></content><author><name></name></author><category term="Cybersecurity" /><category term="Active Directory" /><category term="cybersecurity" /><category term="learning" /><category term="htb" /><category term="ctf" /><category term="pentesting" /><category term="ad" /><category term="active-directory" /><category term="write-owner" /><category term="escapetwo" /><summary type="html"><![CDATA[Hi again! It’s been… a while? Clearly, I wasn’t capable of maintaining this blog after, wow, 4 years of nothing. That really takes a lot of effort to not write anything here.]]></summary></entry><entry><title type="html">My first failed journey in the OSCP</title><link href="https://xexio15.github.io/posts/OSCP-first-journey/" rel="alternate" type="text/html" title="My first failed journey in the OSCP" /><published>2021-08-25T18:00:00+02:00</published><updated>2021-08-27T17:41:11+02:00</updated><id>https://xexio15.github.io/posts/OSCP-first-journey</id><content type="html" xml:base="https://xexio15.github.io/posts/OSCP-first-journey/"><![CDATA[<p>Hi! Welcome to my first post in this blog. I hope you don’t get brutally bored reading my horribly written posts, but I’ll improve.</p>
+
+<p>So, let’s inaugurate this blog with a very typical write which involves OSCP.</p>
+
+<p>At the start of this year 2021 I decided to take the OSCP since the opportunity came to me. But this needs some context since you don’t know me and my previous experience.</p>
+
+<p>So, let’s start by talking a bit about my past… (If you don’t care, which is completely understandable you can just jump to the OSCP thing)</p>
+
+<h2 id="whoami">WHOAMI</h2>
+<p>I studied Computer Science in Barcelona from 2015 to 2019, but I wasn’t into cybersecurity until 2019 were I really started to think to go that way, so as you can suppose, in 2019 I knew near to nothing about cybersecurity. I knew the existence of some basic attacks like SQL Injections or Cross-Site Scripting, but didn’t even know how they worked, I could suppose that due to my knowledge about Web Programming, Databases, and general knowledge from the career, but that’s it.</p>
+
+<p>That year I decided to do my final degree project about SIEMs, specifically about ELK, as a way to start with cybersecurity and keeping in mind my knowledge at this time. 
+To be honest it wasn’t the best decision since my learning was a bit poor, and now I can see why. I was so lost researching about SIEMs without a good base, the idea of a SIEM is simple but if you don’t know how real-world threats work, it’s difficult to have a good understanding. So, I was a bit overloaded with information and that discouraged me a lot. <br />
+But in the end it wasn’t that bad, at least I learned how ELK works, and after a year of learning a lot, I can tell that no matter if something doesn’t go completely well, if you learned something in that time, it is worth it. This ELK knowledge opened me the doors a little bit and I started working as a Junior Security Consultant in September.</p>
+
+<p>After a year of working, I was a bit disappointed with my learning while working, I learned a lot on how big companies work but almost nothing about cybersecurity, just some extra concepts, since I wasn’t totally enjoying my work and had almost no time in the week, I hadn’t the mood to learn by my own.</p>
+
+<p>Then I started to think in making a change, and finally in 2020 (a year that nobody will forget) an offer to work as Application Security Analyst came to me, that job was totally new for me, I didn’t even know that code analysis (SAST) was made, and since programming always has been an interesting field for me, I thought that this was the perfect offer. So, in the middle of COVID-19 (or that’s what we thought back then) and after a global quarantine (even now feels weird to think about this) I accepted that offer, and 8 months later I can tell that was a tier S+ decision in my life.</p>
+
+<p>Since day 1 I learned a lot, first were the bases of the different attacks, which help a lot to learn them in SAST since you can see why every attack is possible looking at the code. With some months of work, I learned a lot of things (with a great team) and here is when I consider my cybersecurity base started (and continues because I’m still a total newbie). After some months I felt something strange, I wanted to learn more besides what I was learning from work, I was motivated!!</p>
+
+<p>Then the opportunity of taking the OSCP came out. Even having zero knowledge of pentesting and a thin base of knowledge about different attacks I accepted it.</p>
+
+<h2 id="the-oscp-journey">The OSCP Journey</h2>
+<h3 id="first-days">First days</h3>
+<p>As I said I accepted the opportunity of taking the OSCP, it was in March 2021, but the labs will start on 18th April. The first thoughts that I had were that I wouldn’t be capable, but I started doing some research until the start of the lab (keep in mind that I didn’t even know how to start a pentest).</p>
+
+<p>First started to learn about enumeration using nmap for ports, dirb for web… Then I learned something that I thought would be more advanced, which are reverse shells (for those who are in the same situation as I was, a reverse shell consists essentially in having in your terminal a shell of the victim machine).</p>
+
+<p>After some theory, which to be honest, it’s a bit boring to read but necessary, I started to look at Hack The Box and found out there is a list with <a href="https://docs.google.com/spreadsheets/d/1dwSMIAPIam0PuRBkCiDI88pU3yzrqqHkDtBngUHNCw8/edit#gid=1839402159">machines like OSCP</a>. But before paying for HTB I watched some videos from <a href="https://www.youtube.com/channel/UCa6eh7gCkpPo5XXUDfygQQA">ippsec</a> trying not to spoiler some machines of that list, for those who don’t know about ippsec he has a known YouTube channel where he uploads HackTheBox walkthroughs.</p>
+
+<p>Then I started to do some HTB machines by myself, or at least I tried. I did like 5 or 6 machines while waiting for lab time. But none of them were straight done by myself, in every machine at some point I needed to read some writeup, which I don’t think it’s a bad thing now but then it was a bit frustrating. From my opinion, you need to read writeups, but always after spending a lot of time searching for a solution for your problem. 
+After that month, at least I had a better base to start the labs. Then the 18th of April arrived.</p>
+
+<h3 id="into-the-labs">Into the labs</h3>
+<p>Here started my three months personal hell.</p>
+
+<p>I started the labs the first day, starting with the path recommended by Offensive Security which are 5 easy machines. For my surprise I was very comfortable doing those machines, which gave me a lot of motivation, I was really into it. I had a 3 months lab, and the first 2 months I was doing machines every day, I wanted to use all the time I could. From Monday to Friday, I only worked until 17:00 did some exercise to clear up my mind and did OSCP until 21:00/23:00 depending on every day, and like 8 hours on Saturday and Sunday. I felt super motivated, until my brain started noticing the fatigue, I was learning a lot, yes, but I almost never did anything else than work, OSCP and some breaks.</p>
+
+<p>That 2 months fatigue collided with, in my opinion, are the worst part of OSCP, which are machines with dependencies, and subnets.
+My way to go was to root a machine, do a quick enumeration for users:passwords and jump to another machine. At this point I almost did every machine that I was capable that didn’t have a strong dependency on other machines or whose users or passwords weren’t to hide. 
+So, I started doing machines from subnets, here starts a problem I wasn’t aware of, which is that you need a proxy machine to connect to the subnets. After some theory reading, I managed to connect to subnets, but there is no warning that these connections can be much different than a direct connection, so I spent a lot of time trying just to enumerate or connect correctly to some machines, added to the fatigue I was talking about a lot of frustration came to me. So, after 2 months of constant OSCP, I started taking a lot more breaks, first it was a day or a weekend, but there were some weeks where I barely can’t even concentrate.</p>
+
+<p>My brain needed to stop but at the same time it made me feel like I was losing the time. During these struggling days I managed to understand how subnets worked, and get into it, but I couldn’t follow that every day-work again. So, I continued but in a lighter way. Apart from that, I learned a lot during these months I felt quite capable of passing the exam, so I scheduled it to 8th August 9:00 AM.</p>
+
+<p>Probably you are thinking why I scheduled it just because my lab was ending and why not extend that lab or wait a bit. Simple answer, I was burned out, I just wanted to try it no matter what and “take that weight off my shoulders” (I don’t know if this expression works in English, but I hope you understand what I mean). When it comes to exams, I always had this problem of not being capable of disconnecting until it’s gone.</p>
+
+<p>So finally, the end of the lab arrived on 17th July, I hit the 50 machines mark at the end of that day. To be honest, I didn’t know if I was ready or not for the exam, I didn’t know how it would be. That weeks prior to the exam I took some vacations and some days before the exam I did some HTB and remembering of Buffer Overflow exercises.</p>
+
+<h3 id="the-exam">The Exam</h3>
+<p>Finally, the exam day came, I slept a lot and woke up at 7:30 AM. I read a lot about starting with Buffer Overflow, it went pretty well I recommend following that advice. After one hour and a half I had the exploit for the Buffer Overflow done and I was pretty happy and motivated “Nice, it’s 10:30 AM I still have all day”. Then 14 hours of hitting a wall, that’s probably the most frustrating time I ever had.</p>
+
+<p>After the Buffer Overflow I started with the 10 points machine, but couldn’t figure it out. So calmly I decided to eat my breakfast and go for a 20 pointer. Same thing happened, I fully focused on those two 20 points machines, but that was a wall I couldn’t pass. So, frustration came in, a lot of frustration. After 12 hours I couldn’t be able of simply getting a shell, how could it be possible? That didn’t go much better, at the end of the day I was exhausted, so I decided to at least take the 10 pointer to maintain a bit of pride. After some hours I got it, but it was 2:00AM already and I couldn’t think anymore. So, I ended my exam after 16 hours and my journey finished.</p>
+
+<h3 id="after-the-exam">After the exam</h3>
+<p>The day after I was pure frustration, but after two days I started looking for good things. I learned a lot in this journey, and only in three months, three months before I didn’t even know how to use nmap, and now I’m capable of hacking some machines and gained a lot of understanding on how every little thing you have misconfigured could lead to a disaster. Combined with my work all this knowledge helps me read a lot of articles that I couldn’t understand before, so in the end it was a pretty good journey. Yes, it’s a pity to not get the OSCP Badge, but whatever, knowledge it’s more important and I have plenty of opportunities to take another exam.</p>
+
+<h3 id="conclusions">Conclusions</h3>
+<p>After some weeks my decision has been to change a bit my way of learning. Now I have a pretty good base, and there is no exam in the skyline, so I can take my time, I’ll still studying to learn more and more, but like it was a hobby, just enjoying it and taking my time to understand everything, which is something that I didn’t do.</p>
+
+<p>Also, if you are thinking to take the OSCP, do it, but I recommend also to do a lot of <a href="https://www.hackthebox.eu/">HackTheBox</a>, <a href="https://www.vulnhub.com/">VulnHub</a>, or the official <a href="https://www.offensive-security.com/labs/individual/">Offensive Security Proving Grounds</a> which I didn’t tried yet. From my experience, HackTheBox machines were more like the exam ones than the lab (those are more obsolete). And OffSec Proving Grounds are exam retired machines if I’m not wrong.</p>
+
+<p>I hope I didn’t bored you a lot being my first write, here I let you some conclusions after that journey</p>
+<ul>
+  <li>Try not to burn out with the labs, if you need more time take it.</li>
+  <li>Even if you fail at the end, just look at what you learned, sounds a bit cliché, but at the end, is the only thing that matters</li>
+  <li>There is plenty of platforms like HackTheBox, use them!</li>
+</ul>]]></content><author><name></name></author><category term="Cybersecurity" /><category term="OSCP" /><category term="cybersecurity" /><category term="learning" /><category term="oscp" /><category term="courses" /><category term="pentesting" /><summary type="html"><![CDATA[Hi! Welcome to my first post in this blog. I hope you don’t get brutally bored reading my horribly written posts, but I’ll improve.]]></summary></entry></feed>
