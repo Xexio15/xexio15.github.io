@@ -6,7 +6,7 @@
 
 -
   type: hackerone
-  icon: 'fab bug'
+  icon: 'fab fa-bug'
   url:  'https://hackerone.com/xexio15'                  # Fill with your hackerone profile
 
 #-
