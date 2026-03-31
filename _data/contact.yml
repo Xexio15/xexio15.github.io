@@ -3,6 +3,11 @@
 -
   type: github
   icon: 'fab fa-github-alt'
+
+  type: hackerone
+  icon: 'fab fa-hacker-one'
+  url:  'https://hackerone.com/xexio15'                  # Fill with your hackerone profile
+
 #-
 #  type: twitter
 #  icon: 'fab fa-twitter'
